@@ -1,6 +1,0 @@
-{
-  "patch": "--- a/src/main/java/com/example/App.java\n+++ b/src/main/java/com/example/App.java\n@@ -40,8 +40,11 @@\n public class App {\n // ... existing code ...\n     String id = request.getParameter(\"id\");\n-    String query = \"SELECT * FROM users WHERE id = '\" + id + \"';\";\n-    statement.executeQuery(query);\n+    String query = \"SELECT * FROM users WHERE id = ?\";\n+    PreparedStatement pstmt = connection.prepareStatement(query);\n+    pstmt.setString(1, id);\n+    ResultSet rs = pstmt.executeQuery();\n // ... existing code ...\n }\n",
-  "project_path": "./test_project",
-  "final_status": "SUCCESS",
-  "total_time_seconds": 0.0
-}

@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache
+.cache/
+
+# Reports
+# Ignore all JSON files as requested
+*.json
+
+# If you want to track specific JSON files (e.g., configuration),
+# you can explicitly un-ignore them by adding a line like this:
+# !config_list.json
+# !evaluation/vul4j_results.json
+
+# IDE / Editor specific
+.vscode/
+.idea/ 

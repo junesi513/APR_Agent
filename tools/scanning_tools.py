@@ -1,109 +1,65 @@
 import json
 import subprocess
 import logging
+import os
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def run_codeql_scan(path: str) -> str:
+def run_codeql_scan(project_path: str) -> str:
     """
-    주어진 경로에 대해 CodeQL 스캔을 실행하고 결과를 JSON 문자열로 반환합니다.
-    실제 구현에서는 CodeQL CLI를 실행해야 합니다.
-
-    :param path: 스캔할 프로젝트의 경로.
-    :return: CodeQL 스캔 결과가 담긴 JSON 문자열.
+    (미구현) CodeQL 스캔을 실행하고 결과를 JSON으로 반환하는 더미 함수.
     """
-    logging.info(f"Executing CodeQL scan on {path}...")
-    # 실제 구현 예시:
-    # try:
-    #     db_path = f"{path}/codeql_db"
-    #     # CodeQL 데이터베이스 생성
-    #     subprocess.run(["codeql", "database", "create", db_path, "--language=java", f"--source-root={path}"], check=True, capture_output=True, text=True)
-    #     # CodeQL 분석 실행
-    #     results_path = f"{path}/codeql_results.json"
-    #     subprocess.run(["codeql", "database", "analyze", db_path, "--format=sarif-latest", f"--output={results_path}", "java-security-and-quality.qls"], check=True, capture_output=True, text=True)
-    #     with open(results_path, 'r') as f:
-    #         return f.read()
-    # except FileNotFoundError:
-    #     logging.error("CodeQL command not found. Please ensure CodeQL CLI is installed and in your PATH.")
-    #     return "{}"
-    # except subprocess.CalledProcessError as e:
-    #     logging.error(f"CodeQL scan failed: {e.stderr}")
-    #     return "{}"
+    logging.warning("CodeQL scan is not implemented. Returning dummy data.")
+    return "{}" # 빈 JSON 객체 반환
 
-    # 현재는 더미 데이터를 반환합니다.
-    dummy_result = {
-        "runs": [{
-            "results": [
-                {
-                    "ruleId": "java/sql-injection",
-                    "message": {
-                        "text": "SQL Injection vulnerability found."
-                    },
-                    "locations": [{
-                        "physicalLocation": {
-                            "artifactLocation": {
-                                "uri": "src/main/java/com/example/App.java"
-                            },
-                            "region": {
-                                "startLine": 42
-                            }
-                        }
-                    }],
-                    "properties": {
-                        "security-severity": "9.8" # CVSS Score
-                    }
-                }
-            ]
-        }]
-    }
-    return json.dumps(dummy_result, indent=2)
-
-def run_snyk_scan(path: str) -> str:
+def run_snyk_scan(project_path: str) -> str:
     """
-    주어진 경로에 대해 Snyk 스캔을 실행하고 결과를 JSON 문자열로 반환합니다.
-    실제 구현에서는 Snyk CLI를 실행해야 합니다.
-
-    :param path: 스캔할 프로젝트의 경로.
-    :return: Snyk 스캔 결과가 담긴 JSON 문자열.
+    (미구현) Snyk 스캔을 실행하고 결과를 JSON으로 반환하는 더미 함수.
     """
-    logging.info(f"Executing Snyk scan on {path}...")
-    # 실제 구현 예시:
-    # try:
-    #     # Snyk 코드 스캔 실행
-    #     result = subprocess.run(["snyk", "code", "test", "--json", path], check=True, capture_output=True, text=True)
-    #     return result.stdout
-    # except FileNotFoundError:
-    #     logging.error("Snyk command not found. Please ensure Snyk CLI is installed and in your PATH.")
-    #     return "{}"
-    # except subprocess.CalledProcessError as e:
-    #     # Snyk는 취약점을 찾으면 non-zero exit code를 반환할 수 있으므로, stderr를 확인해야 합니다.
-    #     if "vulnerabilities found" in e.stdout:
-    #         return e.stdout
-    #     logging.error(f"Snyk scan failed: {e.stderr}")
-    #     return "{}"
+    logging.warning("Snyk scan is not implemented. Returning dummy data.")
+    return "{}" # 빈 JSON 객체 반환
 
-    # 현재는 더미 데이터를 반환합니다.
-    dummy_result = {
-        "vulnerabilities": [
-            {
-                "id": "SNYK-JAVA-SQLI-12345",
-                "title": "SQL Injection",
-                "severity": "high",
-                "cvssScore": "9.8",
-                "filePath": "src/main/java/com/example/App.java",
-                "lineNumber": 42,
-                "description": "SQL Injection vulnerability found in user input."
-            },
-            {
-                "id": "SNYK-JAVA-XSS-67890",
-                "title": "Cross-Site Scripting",
-                "severity": "medium",
-                "cvssScore": "6.1",
-                "filePath": "src/main/java/com/example/Util.java",
-                "lineNumber": 101,
-                "description": "Cross-Site Scripting (XSS) possible."
-            }
+def run_semgrep_scan(project_path: str) -> str:
+    """
+    지정된 프로젝트 경로에 대해 Semgrep 스캔을 실행하고,
+    결과를 JSON 형식의 문자열로 반환합니다.
+    """
+    logging.info(f"Running Semgrep scan on {project_path}...")
+    semgrep_executable = "/home/user/anaconda3/envs/ace4_sijune/bin/semgrep"  # 전체 경로 지정
+
+    if not os.path.exists(semgrep_executable):
+        logging.error(f"Semgrep executable not found at {semgrep_executable}")
+        return '{"error": "Semgrep executable not found"}'
+
+    try:
+        command = [
+            semgrep_executable,
+            "scan",
+            "--config", "auto",
+            "--json",
+            "."  # 현재 디렉토리(cwd)를 스캔하도록 변경
         ]
-    }
-    return json.dumps(dummy_result, indent=2)
+        
+        # Semgrep 실행
+        process = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=project_path  # 작업 디렉토리를 project_path로 설정
+        )
+        
+        logging.info("Semgrep scan completed successfully.")
+        return process.stdout
+
+    except FileNotFoundError:
+        logging.error("Semgrep command not found. Please ensure Semgrep is installed and in your PATH.")
+        return '{"error": "Semgrep not found"}'
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Semgrep scan failed with exit code {e.returncode}.")
+        logging.error(f"Semgrep stderr:\n{e.stderr}")
+        return f'{{"error": "Semgrep scan failed", "details": {json.dumps(e.stderr)}}}'
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during Semgrep scan: {e}")
+        return f'{{"error": "An unexpected error occurred", "details": "{e}"}}'

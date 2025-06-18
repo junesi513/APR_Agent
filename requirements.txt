@@ -1,0 +1,5 @@
+google-generativeai
+google-cloud-aiplatform
+diff-match-patch
+openai
+termcolor 
