@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import google.generativeai as genai
+import re
 
 from tools.scanning_tools import run_semgrep_scan, run_codeql_scan, run_snyk_scan
 
@@ -50,6 +51,30 @@ def _call_llm(prompt: str) -> str:
     except Exception as e:
         logging.error(f"LLM call failed: {e}")
         return f'{{"error": "LLM call failed", "details": "{e}"}}'
+
+# =====================================================================================
+# Code Summarizer Function (New)
+# =====================================================================================
+def summarize_code_functionality(code_snippet: str) -> str:
+    """
+    LLM을 호출하여 주어진 코드의 기능적, 의미적 요약을 생성하고
+    JSON 형식의 문자열로 반환합니다.
+    """
+    prompt = f"""
+    You are an expert code analyst. Your task is to read the following code snippet and provide a clear, concise summary of its functionality.
+    Focus on the overall purpose of the code, its primary inputs and outputs, and its role within a larger application.
+    Do not analyze for vulnerabilities, just explain what the code *does*.
+
+    Return the result as a JSON object with a single key "code_summary".
+
+    **Full Source Code:**
+    ```java
+    {code_snippet}
+    ```
+
+    Provide the functional summary as a single JSON object.
+    """
+    return _call_llm(prompt)
 
 # =====================================================================================
 # Scanner Function
@@ -102,7 +127,7 @@ def run_scans_and_report(project_path: str) -> str:
 # =====================================================================================
 # Analyzer Function
 # =====================================================================================
-def analyze_vulnerability(code_snippet: str, file_path: str, vulnerability_json: str, semgrep_report_json: str = None) -> str:
+def analyze_vulnerability(code_snippet: str, file_path: str, vulnerability_json: str, semgrep_report_json: str = None, code_summary_json: str = None) -> str:
     """
     LLM을 호출하여 주어진 코드와 취약점 정보를 분석하고,
     분석 보고서를 JSON 형식의 문자열로 반환합니다.
@@ -125,16 +150,31 @@ def analyze_vulnerability(code_snippet: str, file_path: str, vulnerability_json:
         except json.JSONDecodeError:
             semgrep_section = "\n**Semgrep Scan Results:**\n(Could not parse Semgrep report)\n"
 
+    summary_section = ""
+    if code_summary_json:
+        try:
+            summary_data = json.loads(code_summary_json)
+            if summary_data.get("code_summary"):
+                summary_section = f"""
+    **Code Functionality Summary:**
+    To help you understand the context, here is a high-level summary of what this code does:
+    ---
+    {summary_data.get("code_summary")}
+    ---
+    """
+        except json.JSONDecodeError:
+            summary_section = "\n**Code Functionality Summary:**\n(Could not parse summary report)\n"
+
 
     prompt = f"""
     You are a senior security analyst. Your task is to analyze a piece of code for a reported vulnerability.
-    I will provide you with the main vulnerability details and the full source code.
-    Additionally, I will provide the results from a Semgrep scan on the same code for extra context.
+    I will provide you with a summary of the code's functionality, the main vulnerability details, the full source code, and results from a Semgrep scan.
 
-    Your primary goal is to perform a deep root cause analysis for the main reported vulnerability, using the Semgrep results to enrich your understanding.
+    Your primary goal is to perform a deep root cause analysis for the main reported vulnerability, using all the contextual information provided.
     Then, suggest a concrete fix strategy.
     Return the result in a JSON format with keys: "file_path", "line_number", "vulnerable_code_snippet", "root_cause_analysis", "suggested_fix_strategy".
 
+    {summary_section}
     **Main Vulnerability Details:**
     - ID: {vulnerability.get('id', 'N/A')}
     - File: {file_path}
@@ -147,7 +187,7 @@ def analyze_vulnerability(code_snippet: str, file_path: str, vulnerability_json:
     ```
 
     Based on all the information above, provide your final analysis as a single JSON object.
-    Focus on the main vulnerability, but use the Semgrep findings to support your analysis.
+    Focus on the main vulnerability, but use the functional summary and Semgrep findings to support your analysis.
     """
     return _call_llm(prompt)
 
@@ -183,6 +223,63 @@ def generate_patch(analysis_report_json: str) -> str:
     }}
     """
     return _call_llm(prompt)
+
+# =====================================================================================
+# Diff Parser Function (Updated)
+# =====================================================================================
+def parse_diff_to_patch_list(diff_content: str) -> list:
+    """
+    diff 형식의 문자열을 파싱하여, '각 라인'의 변경 사항에 대한
+    상세 정보 객체의 리스트를 반환합니다.
+    """
+    if not diff_content:
+        return []
+
+    patch_list = []
+    normalized_content = diff_content.replace('\\n', '\n')
+    
+    # hunk: `@@ ... @@`로 시작하고, 다음 `@@` 또는 문자열 끝까지의 블록
+    hunk_pattern = re.compile(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@([\s\S]*?)(?=\n@@|\Z)')
+
+    for match in hunk_pattern.finditer(normalized_content):
+        try:
+            original_line_num = int(match.group(1))
+            new_line_num = int(match.group(2))
+            hunk_body = match.group(3)
+            
+            lines = hunk_body.strip().split('\n')
+
+            # hunk 내부에서 라인별로 처리
+            for line in lines:
+                if not line: continue
+
+                if line.startswith('+'):
+                    # 삽입된 라인
+                    patch_list.append({
+                        "action": "Insert",
+                        "line_number": new_line_num,
+                        "patch_code": [line[1:].strip()]
+                    })
+                    new_line_num += 1
+                elif line.startswith('-'):
+                    # 삭제된 라인
+                    patch_list.append({
+                        "action": "Delete",
+                        "line_number": original_line_num,
+                        "patch_code": []
+                    })
+                    original_line_num += 1
+                elif line.startswith(' '):
+                    # 컨텍스트 라인 (변경 없음)
+                    original_line_num += 1
+                    new_line_num += 1
+                # diff 헤더 등 다른 라인은 무시
+        
+        except (ValueError, IndexError) as e:
+            logging.error(f"Failed to parse hunk: {match.group(0)} - Error: {e}")
+            continue
+    
+    return patch_list
 
 # =====================================================================================
 # Validator Function

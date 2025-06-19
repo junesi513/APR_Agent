@@ -8,7 +8,9 @@ import shutil
 
 from tools.avr_functions import (
     analyze_vulnerability,
-    generate_patch
+    generate_patch,
+    summarize_code_functionality,
+    parse_diff_to_patch_list
 )
 from tools.scanning_tools import run_semgrep_scan
 
@@ -33,6 +35,11 @@ def process_vulnerability(vuln_details: dict):
         logging.error(f"'code_before' is missing for ID {vuln_id}. Skipping.")
         return
 
+    # 1. (신규) 코드 기능 분석
+    logging.info("Step 1: Summarizing code functionality...")
+    summary_report_json = summarize_code_functionality(code_before)
+    logging.info("Code summary generated.")
+    
     # 임시 작업 공간 생성
     workspace_dir = tempfile.mkdtemp(prefix="avr_workspace_")
     logging.info(f"Created temporary workspace at: {workspace_dir}")
@@ -54,35 +61,43 @@ def process_vulnerability(vuln_details: dict):
             logging.info("Created temporary file for scanning at workspace root.")
         
         # 2. Semgrep 스캔 실행
-        logging.info("Step 1: Running Semgrep scan on the provided code...")
+        logging.info("Step 2: Running Semgrep scan on the provided code...")
         semgrep_report_json = run_semgrep_scan(workspace_dir)
         logging.info("Semgrep scan completed.")
 
-        # 3. 취약점 분석 (Semgrep 결과와 함께)
-        logging.info("Step 2: Analyzing vulnerability with Semgrep context...")
-        analysis_report = analyze_vulnerability(code_before, file_path, json.dumps(vuln_details), semgrep_report_json)
+        # 4. 취약점 분석 (기능 요약 및 Semgrep 결과와 함께)
+        logging.info("Step 3: Analyzing vulnerability with summary and Semgrep context...")
+        analysis_report = analyze_vulnerability(
+            code_snippet=code_before, 
+            file_path=file_path, 
+            vulnerability_json=json.dumps(vuln_details), 
+            semgrep_report_json=semgrep_report_json,
+            code_summary_json=summary_report_json
+        )
         logging.info(f"Analysis Report:\n{analysis_report}")
 
-        # 4. 패치 생성
-        logging.info("Step 3: Generating patch...")
+        # 5. 패치 생성
+        logging.info("Step 4: Generating patch...")
         patch_generation_report = generate_patch(analysis_report)
         logging.info(f"Patch Generation Report:\n{patch_generation_report}")
 
-        # 5. 최종 보고서 생성
-        logging.info("Step 4: Creating final report...")
+        # 6. 최종 보고서 생성
+        logging.info("Step 5: Creating final report...")
         patch_data = json.loads(patch_generation_report)
         diff_patch = patch_data.get("diff")
 
         if diff_patch is None:
             raise ValueError("Diff key not found in patch generation report")
 
+        # (신규) diff 내용을 파싱하여 patch 객체 리스트 생성
+        patch_list = parse_diff_to_patch_list(diff_patch)
+
         final_report_data = {
             "id": vuln_id,
             "file_path": file_path,
-            "line": line,
-            "code_before": code_before,
-            "patch": diff_patch,
             "analysis": json.loads(analysis_report),
+            "patch_diff": diff_patch,
+            "patch": patch_list
         }
         
         report_dir = "reports"
@@ -117,18 +132,38 @@ def main():
         if not isinstance(data, list): data = [data]
         target_vuln = next((item for item in data if str(item.get("id")) == args.id), None)
 
-        if target_vuln and target_vuln.get("files"):
-            file_info = target_vuln["files"][0]
-            code_before = file_info.get("code_before")
+        if target_vuln:
+            # 1. JSON에서 파일 이름 정보 가져오기
+            file_info = target_vuln.get("files", [{}])[0]
+            # 'filepath_before' 대신 'filename' 필드를 읽도록 수정
+            filename_from_json = file_info.get("filename")
             
-            if not code_before:
-                raise ValueError("'code_before' field not found in the JSON data for the given ID.")
+            if not filename_from_json:
+                raise ValueError("'filename' not found in the JSON data for the given ID.")
 
+            # 2. VUL4J 프로젝트 경로 구성
+            vuln_id = args.id
+            base_dir = os.path.join("/home/ace4_sijune", "vul4j_test", f"VUL4J-{vuln_id}", "VUL4J", "vulnerable")
+            full_path = os.path.join(base_dir, filename_from_json)
+            logging.info(f"Attempting to read source code from: {full_path}")
+
+            # 3. 소스 코드 파일 읽기
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    code_before = f.read()
+            except FileNotFoundError:
+                logging.error(f"Source code file not found at '{full_path}'. Please check the path and VUL4J project structure.")
+                return
+            except Exception as e:
+                logging.error(f"Failed to read source code file: {e}")
+                return
+
+            # 4. 분석을 위한 데이터 구성 및 실행
             vuln_details = {
                 "id": target_vuln.get("id"),
-                "file_path": file_info.get("filepath_before"),
+                "file_path": filename_from_json,
                 "line": None, 
-                "code_before": code_before,
+                "code_before": code_before, # 파일에서 직접 읽은 코드로 교체
                 "description": target_vuln.get("cve_description", "N/A"),
             }
             process_vulnerability(vuln_details)
