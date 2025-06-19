@@ -9,22 +9,25 @@ MODEL = None
 
 def configure_gemini():
     """
-    config_list.json에서 Gemini API 키를 찾아 모델을 설정합니다.
-    이 함수는 에이전트 시작 시 한 번만 호출되어야 합니다.
+    .key/gemini_api.key 파일에서 Gemini API 키를 읽어 모델을 설정합니다.
     """
     global MODEL
     try:
-        with open("OAI_CONFIG_LIST") as f: # Corrected file name
-            config_data = json.load(f)
-        gemini_config = next((config for config in config_data if config.get("model") and "gemini" in config["model"]), None)
-        
-        if gemini_config and gemini_config.get("api_key"):
-            genai.configure(api_key=gemini_config["api_key"])
+        key_path = os.path.join(".key", "gemini_api.key")
+        with open(key_path, 'r', encoding='utf-8') as f:
+            api_key = f.read().strip()
+
+        if api_key:
+            genai.configure(api_key=api_key)
             MODEL = genai.GenerativeModel('gemini-1.5-pro-latest')
             logging.info("Gemini API가 성공적으로 설정되었습니다.")
         else:
-            logging.error("OAI_CONFIG_LIST에서 Gemini API 설정을 찾을 수 없습니다.")
+            logging.error(f"{key_path} 파일이 비어있습니다.")
             MODEL = None
+    except FileNotFoundError:
+        logging.error(f"API 키 파일을 찾을 수 없습니다: {key_path}")
+        logging.error("프로젝트 루트에 '.key' 디렉토리를 만들고, 그 안에 'gemini_api.key' 파일을 생성하여 API 키를 저장해주세요.")
+        MODEL = None
     except Exception as e:
         logging.error(f"Gemini 설정 중 오류 발생: {e}")
         MODEL = None

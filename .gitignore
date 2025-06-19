@@ -22,4 +22,7 @@ reports/
 
 # IDE / Editor specific
 .vscode/
-.idea/ 
+.idea/
+
+# 민감한 정보를 포함하는 디렉토리
+.key/ 
