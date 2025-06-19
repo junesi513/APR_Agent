@@ -1,0 +1,12 @@
+[
+    {
+        "model": "gemini-1.5-pro-latest",
+        "api_key": "AIzaSyCWA58IOFNqypP0oENiOK5rvKApirD5P_w",
+        "api_type": "google"
+    },
+    {
+        "model": "codellama",
+        "base_url": "http://localhost:11434/v1",
+        "api_type": "ollama"
+    }
+] 

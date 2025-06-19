@@ -1,0 +1,25 @@
+graph TD
+    A[Start] --> B{초기 분석};
+    B --> B1[list_files];
+    B --> B2[read_file_content];
+    
+    B1 & B2 --> C{정적 분석};
+    C --> C1[run_semgrep_scan];
+    
+    C1 --> D{Semgrep 성공?};
+    D -- No --> E[LLM이 직접 코드 분석];
+    D -- Yes --> F[스캔 결과 분석];
+    
+    E --> G(자가 교정 루프);
+    F --> G;
+
+    subgraph 자가 교정 루프
+        direction LR
+        G1[edit_code: 코드 수정 시도] --> G2[compile_and_test: 컴파일 검증];
+        G2 --> G3{컴파일 성공?};
+        G3 -- No --> G1;
+    end
+
+    G -- 성공 --> H{패치 완료};
+    H --> H1[finish_patch: 파일 저장 및 보고서 생성];
+    H1 --> I[End]; 

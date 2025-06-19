@@ -7,8 +7,13 @@ __pycache__/
 .cache/
 
 # Reports
+reports/
+
+# Reports
 # Ignore all JSON files as requested
 *.json
+*.txt
+*.log
 
 # If you want to track specific JSON files (e.g., configuration),
 # you can explicitly un-ignore them by adding a line like this:
