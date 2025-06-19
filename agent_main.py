@@ -20,7 +20,10 @@ from tools.agent_tools import (
     tool_definitions,
     find_tool_by_name,
     create_report,
-    save_report
+    save_report,
+    revert_to_vulnerable,
+    compile_and_test,
+    edit_code
 )
 from llm_handler import call_gemini_api, configure_gemini # configure_gemini 임포트 추가
 import difflib # _save_final_report 에서 직접 사용하도록 이동
@@ -200,27 +203,22 @@ class Agent:
 
 **매우 중요한 규칙:**
 - **작업 흐름:** 당신은 다음의 작업 절차를 따라야 합니다.
-  1. **초기 분석:** `list_files`와 `read_file_content`로 기본적인 파일 정보를 파악합니다.
-  2. **정적 분석:** `run_semgrep_scan`을 실행하여 자동화된 보안 스캔을 수행합니다.
-     - **Semgrep 실패 시:** 작업을 중단하지 말고, 당신의 전문 지식에 따라 코드의 논리적 결함을 직접 분석하여 **반드시 하나 이상의 `REPLACE`, `INSERT`, 또는 `DELETE` 작업을 포함하는, 비어있지 않은 `edits` 목록으로 `edit_code`를 호출해야 합니다.** 섣불리 취약점이 없다고 단정하지 마세요.
-  3. **코드 수정 및 검증 루프:**
-     a. 분석 결과를 바탕으로 `edit_code`를 사용하여 메모리상에서 코드를 수정합니다.
-     b. **수정 직후, 반드시 `compile_and_test`를 호출하여 당신이 수정한 코드의 유효성을 즉시 검증해야 합니다.**
-     c. 컴파일 결과가 **성공일 때만** 다음 단계로 넘어갈 수 있습니다. 컴파일이 실패하면, 실패 원인을 분석하여 다시 a단계(코드 수정)로 돌아가 문제를 해결하세요. 이 과정을 성공할 때까지 반복해야 합니다.
-  4. **종료 및 패치 적용:** **`compile_and_test`의 성공이 확인된 후에만** `finish_patch`를 호출하여 메모리의 변경 사항을 실제 파일에 저장하고, diff 리포트를 생성하며 작업을 마무합니다.
-- 당신의 모든 응답은 **반드시** `thought`와 `tool` 필드를 포함한 유효한 JSON 객체여야 합니다.
-- API는 JSON 모드로 설정되어 있으므로, 다른 어떤 텍스트도 응답에 포함할 수 없습니다.
+  1. **프로젝트 초기화:** `revert_to_vulnerable` 도구를 호출하여 프로젝트를 깨끗한 원본 취약점 상태로 되돌립니다.
+  2. **초기 분석:** `list_files`, `read_file_content`로 파일 정보를 파악합니다.
+  3. **정적 분석:** `run_semgrep_scan`을 실행하여 자동화된 보안 스캔을 수행합니다. (실패 시 수동 분석)
+  4. **코드 수정 및 자동 검증:**
+     a. 분석 결과를 바탕으로 `edit_code`를 사용하여 코드를 수정합니다.
+     b. 코드를 수정하면, **시스템이 자동으로 컴파일을 시도하고 그 결과를 함께 반환합니다.**
+     c. 반환된 컴파일 결과가 **실패**이면, 실패 원인을 분석하여 성공할 때까지 a단계(코드 수정)를 반복하세요.
+     d. 반환된 컴파일 결과가 **성공**이면, `finish_patch`를 호출하여 작업을 완료하세요.
 
 **사용 가능한 도구:**
-1.  `list_files(directory: str)`: 지정된 디렉토리의 파일 목록을 확인합니다.
-2.  `read_file_content(file_path: str)`: 파일의 전체 내용을 읽어 메모리에 저장합니다. `initial_code`와 `working_code`가 이 내용으로 설정됩니다.
-3.  `run_semgrep_scan(file_path: str)`: Semgrep으로 코드의 정적 분석을 수행합니다.
-4.  `edit_code(edits: list)`: 메모리 상의 코드를 주어진 편집 목록에 따라 수정합니다.
-    - `edits` 파라미터는 편집 작업을 정의하는 딕셔너리의 리스트입니다.
-    - 각 딕셔너리는 `action`, 라인 번호(`line_number` 또는 `start_line`/`end_line`), 그리고 `content`(필요시)를 포함해야 합니다.
-    - 예시: `[ {{"action": "REPLACE", "start_line": 10, "end_line": 11, "content": "..."}}, {{"action": "INSERT", "line_number": 25, "content": "..."}} ]`
-5.  `compile_and_test()`: 메모리에 있는 수정된 코드를 사용하여 컴파일을 시도하고 결과를 반환합니다. 이 도구는 실제 파일의 최종 내용을 변경하지 않습니다.
-6.  `finish_patch(reason: str)`: 모든 분석과 수정을 마친 후, 최종 보고서를 생성하고 임무를 종료합니다. 이 함수는 메모리에 있는 최종 수정 코드를 실제 파일에 쓰고, 원본 코드와의 차이점을 담은 diff 리포트를 생성합니다.
+1.  `revert_to_vulnerable()`: 프로젝트를 원본 취약점 상태로 되돌려, 깨끗한 환경에서 분석을 시작합니다.
+2.  `list_files(directory: str)`: 지정된 디렉토리의 파일 목록을 확인합니다.
+3.  `read_file_content(file_path: str)`: 파일의 전체 내용을 읽어 메모리에 저장합니다.
+4.  `run_semgrep_scan(file_path: str)`: Semgrep으로 코드의 정적 분석을 수행합니다.
+5.  `edit_code(edits: list)`: 메모리 상의 코드를 수정합니다. **이 도구를 실행하면 컴파일이 자동으로 수행되고 결과가 함께 반환됩니다.**
+6.  `finish_patch(reason: str)`: 모든 분석과 수정을 마친 후, 최종 보고서를 생성하고 임무를 종료합니다.
 
 **필수 응답 형식 (JSON만 가능):**
 {{
@@ -232,6 +230,18 @@ class Agent:
     }}
   }}
 }}
+
+## 중요 지침
+1.  **초기화:** 가장 먼저 `revert_to_vulnerable`를 호출하여 프로젝트를 깨끗한 상태로 만드세요.
+2.  **분석:**
+    *   `list_files`로 파일 구조를 파악하고, `read_file_content`로 대상 파일의 코드를 읽으세요.
+    *   `run_semgrep_scan`을 사용하여 정적 분석을 수행하세요.
+    *   **만약 Semgrep이 아무런 결과를 반환하지 않거나 실패하더라도, 절대 작업을 포기하지 마세요. 이는 단순히 Semgrep이 해당 유형의 취약점을 탐지하지 못했음을 의미할 뿐입니다. 이 경우, `read_file_content`를 다시 사용하여 코드의 맥락을 파악하고 직접 취약점을 찾아 수정 계획을 세워야 합니다.**
+3.  **수정 및 검증:**
+     a. 분석 결과를 바탕으로 `edit_code`를 사용하여 코드를 수정합니다.
+     b. 코드를 수정하면, **시스템이 자동으로 컴파일을 시도하고 그 결과를 함께 반환합니다.**
+     c. 반환된 컴파일 결과가 **실패**이면, 실패 원인을 분석하여 성공할 때까지 a단계(코드 수정)를 반복하세요.
+     d. 반환된 컴파일 결과가 **성공**이면, `finish_patch`를 호출하여 작업을 완료하세요.
 """
 
     def _save_final_report(self):
@@ -276,30 +286,35 @@ class Agent:
 
         logging.info(f"최종 보고서 저장 완료: {report_filepath}")
 
-    def dispatch_tool(self, tool_name, params):
-        """요청된 도구를 찾아 실행하고, 그 결과를 반환하며, 전체 로그에 기록합니다."""
-        tool_info = find_tool_by_name(tool_name)
-        if not tool_info:
-            result = f"오류: '{tool_name}'이라는 이름의 도구를 찾을 수 없습니다."
-        else:
-            logging.info(f"도구 실행: {tool_name} with params {params}")
-            try:
-                # 더 이상 **params를 사용하지 않고, 필요한 인자만 명시적으로 전달합니다.
-                # 대부분의 함수는 agent 객체와 함께 params 딕셔너리의 특정 값들을 인자로 받습니다.
-                func = tool_info["function"]
-                
-                # 도구 함수 시그니처에 따라 필요한 인자만 추출하여 호출
-                # inspect 라이브러리를 사용하여 함수의 실제 파라미터 목록을 가져옵니다.
-                sig = inspect.signature(func)
-                
-                # 'agent'는 기본으로 전달하고, 나머지 파라미터는 시그니처에 존재하는 것만 필터링합니다.
-                required_params = {p: params[p] for p in sig.parameters if p != 'agent' and p in params}
+    def dispatch_tool(self, tool_name, parameters):
+        """선택된 도구를 실행하고 결과를 반환합니다. `edit_code`의 경우, 자동으로 컴파일을 수행합니다."""
+        tool_func = find_tool_by_name(tool_name)
+        if not tool_func:
+            return f"오류: '{tool_name}'이라는 이름의 도구를 찾을 수 없습니다."
 
-                result = func(self, **required_params)
+        try:
+            # 대부분의 도구 함수는 첫 번째 인자로 'agent' 객체를 받습니다.
+            # partial을 사용하여 'self'를 미리 바인딩합니다.
+            bound_tool_func = partial(tool_func, self)
+            result = bound_tool_func(**parameters)
 
-            except Exception as e:
-                result = f"도구 '{tool_name}' 실행 중 오류 발생: {e}"
-                logging.error(f"{result}\n{traceback.format_exc()}")
+            # `edit_code`가 성공적으로 실행되면, 자동으로 컴파일 및 테스트를 수행합니다.
+            if tool_name == 'edit_code' and "성공적으로 수정" in result:
+                logging.info("`edit_code` 성공. 자동으로 컴파일 및 테스트를 실행합니다.")
+                compile_result = compile_and_test(self)
+                # 수정된 내용과 컴파일 결과를 함께 반환하여 LLM이 최신 코드를 알 수 있도록 함
+                result += f"\n\n[수정 후 코드 내용]\n{self.working_code}\n\n[자동 실행된 검증 결과]\n{compile_result}"
+            
+            return result
+
+        except TypeError as e:
+            error_message = f"오류: 도구 '{tool_name}' 호출 시 잘못된 파라미터가 전달되었습니다. 필요 파라미터: {list(inspect.signature(tool_func).parameters.keys())}, 전달된 파라미터: {list(parameters.keys())}. 에러: {e}"
+            logging.error(error_message)
+            return error_message
+        except Exception as e:
+            error_message = f"'{tool_name}' 도구 실행 중 예상치 못한 오류 발생: {e}\n{traceback.format_exc()}"
+            logging.error(error_message)
+            return error_message
 
         self.full_log.append(f"🔧 System\n\n도구 실행 결과:\n{result}\n\n---\n")
         return result

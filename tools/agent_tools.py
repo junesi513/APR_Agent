@@ -84,7 +84,7 @@ def read_file_content(agent, file_path: str) -> str:
 
 def run_semgrep_scan(agent, file_path: str) -> str:
     """Semgrep으로 코드의 정적 분석을 수행합니다."""
-    semgrep_path = "/home/ace4_sijune/anaconda3/envs/ace4_sijune/bin/semgrep"
+    semgrep_path = "/home/user/anaconda3/envs/ace4_sijune/bin/semgrep"
     target_file = os.path.join(agent.project_dir, file_path)
     command = [semgrep_path, "scan", "--config", "p/java", "--json", target_file]
     
@@ -125,50 +125,45 @@ def run_semgrep_scan(agent, file_path: str) -> str:
         return error_message
 
 def edit_code(agent, edits: list) -> str:
-    """메모리 상의 코드를 주어진 편집 목록에 따라 수정합니다."""
+    """
+    메모리 상의 코드를 주어진 편집 목록에 따라 수정합니다.
+    LLM이 생성하는 형식(range, new_text)을 직접 처리합니다.
+    """
     if not agent.working_code:
         return "오류: `read_file_content`를 사용하여 파일을 먼저 메모리로 읽어야 합니다."
 
     lines = agent.working_code.splitlines()
     
-    def get_sort_key(edit):
-        return edit.get('start_line', edit.get('line_number', 0))
-            
+    # 교체 작업은 라인 번호가 큰 것부터 처리해야 인덱스가 꼬이지 않습니다.
+    edits.sort(key=lambda x: x.get('range', {}).get('start', {}).get('line', 0), reverse=True)
+
     try:
-        edits.sort(key=get_sort_key, reverse=True)
-
         for edit in edits:
-            action = edit['action'].upper()
+            # LLM이 생성하는 'range'와 'new_text' 키를 사용합니다.
+            if 'range' not in edit or 'new_text' not in edit:
+                raise KeyError("수정 항목에 'range' 또는 'new_text' 키가 없습니다.")
 
-            if action == 'REPLACE':
-                start_idx = int(edit['start_line']) - 1
-                end_idx = int(edit['end_line']) 
-                content = edit['content']
-                if start_idx < 0 or end_idx > len(lines) or start_idx > end_idx:
-                    raise IndexError("REPLACE: 라인 번호가 범위를 벗어났습니다.")
-                lines[start_idx:end_idx] = content.splitlines()
+            start_line = edit['range']['start']['line']
+            end_line = edit['range']['end']['line']
+            new_text = edit['new_text']
 
-            elif action == 'DELETE':
-                start_idx = int(edit['start_line']) - 1
-                end_idx = int(edit['end_line'])
-                if start_idx < 0 or end_idx > len(lines) or start_idx > end_idx:
-                    raise IndexError("DELETE: 라인 번호가 범위를 벗어났습니다.")
-                del lines[start_idx:end_idx]
+            # 라인 번호는 1-based, 리스트 인덱스는 0-based
+            start_idx = start_line - 1
+            # LLM이 생성하는 end_line은 포함되지 않는 경우가 많으므로,
+            # 삭제할 라인 수를 계산하여 end_idx를 결정하는 것이 더 안정적일 수 있습니다.
+            # 하지만 우선은 주어진 그대로 사용합니다.
+            end_idx = end_line
 
-            elif action == 'INSERT':
-                line_idx = int(edit['line_number']) - 1
-                content = edit['content']
-                if line_idx < 0 or line_idx > len(lines):
-                    raise IndexError("INSERT: 라인 번호가 범위를 벗어났습니다.")
-                lines[line_idx:line_idx] = content.splitlines()
+            if start_idx < 0 or end_idx > len(lines) or start_idx > end_idx:
+                raise IndexError(f"라인 번호({start_line}-{end_line})가 파일 범위({len(lines)})를 벗어났습니다.")
+            
+            lines[start_idx:end_idx] = new_text.splitlines()
 
-            else:
-                return f"오류: 알 수 없는 액션 '{action}' 입니다."
-        
         agent.working_code = "\n".join(lines)
         return "메모리의 코드가 성공적으로 수정되었습니다."
-    except (IndexError, ValueError, KeyError) as e:
-        error_message = f"코드 수정 중 오류 발생: 잘못된 라인 번호 또는 형식입니다. {e}"
+    except (IndexError, ValueError, KeyError, TypeError) as e:
+        # LLM이 이상한 형식을 줄 경우를 대비해 예외 처리를 강화합니다.
+        error_message = f"코드 수정 중 오류 발생: 잘못된 형식입니다. ({e}). 받은 edits: {edits}"
         logging.error(error_message)
         return error_message
 
@@ -252,50 +247,79 @@ def finish_patch(agent, reason: str) -> str:
     agent.is_running = False
     return f"에이전트 작업이 종료되었습니다. 이유: {reason}"
 
+def revert_to_vulnerable(agent) -> str:
+    """
+    'vul4j' 명령어를 사용하여 프로젝트를 원본 취약점 상태로 되돌립니다.
+    성공 시, 에이전트의 내부 코드 상태도 초기화합니다.
+    """
+    command = f"vul4j apply --version vulnerable -d ~/vul4j_test/VUL4J-{agent.vuln_id}"
+    logging.info(f"프로젝트를 원본 상태로 되돌립니다: {command}")
+
+    try:
+        process = subprocess.run(
+            command,
+            shell=True, # 홈 디렉토리(~) 해석을 위해 shell=True 사용
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if process.returncode == 0:
+            # 성공 시, 에이전트의 코드 상태도 초기화하여 혼동을 방지
+            agent.working_code = ""
+            agent.initial_code = ""
+            agent.file_path = None
+            logging.info("프로젝트가 성공적으로 원본 상태로 복구되었습니다.")
+            return f"프로젝트가 성공적으로 원본 상태로 복구되었습니다.\n{process.stdout}"
+        else:
+            error_message = f"프로젝트 복구 실패 (종료 코드: {process.returncode}):\nSTDOUT:\n{process.stdout}\nSTDERR:\n{process.stderr}"
+            logging.error(error_message)
+            return error_message
+    except Exception as e:
+        error_message = f"프로젝트 복구 중 예외 발생: {e}"
+        logging.error(error_message)
+        return error_message
+
 # 모든 함수가 정의된 후, 마지막에 tool_definitions를 구성합니다.
 tool_definitions = [
     {
+        "name": "revert_to_vulnerable",
+        "function": revert_to_vulnerable,
+        "description": "프로젝트를 원본 취약점 상태로 되돌려, 깨끗한 환경에서 분석을 시작합니다."
+    },
+    {
         "name": "list_files",
         "function": list_files,
-        "description": "지정된 디렉토리의 파일 및 하위 디렉토리 목록을 반환합니다."
+        "description": "지정된 디렉토리의 파일 목록을 확인합니다."
     },
     {
         "name": "read_file_content",
         "function": read_file_content,
-        "description": "지정된 파일의 전체 내용을 읽어 문자열로 반환합니다. 이 내용은 에이전트의 'initial_code'와 'working_code'에 저장됩니다."
+        "description": "파일의 전체 내용을 읽어 메모리에 저장합니다. `initial_code`와 `working_code`가 이 내용으로 설정됩니다."
     },
     {
         "name": "run_semgrep_scan",
         "function": run_semgrep_scan,
-        "description": "지정된 파일에 대해 Semgrep 스캔을 실행하고 결과를 JSON 형식으로 반환합니다."
+        "description": "Semgrep으로 코드의 정적 분석을 수행합니다."
     },
     {
         "name": "edit_code",
         "function": edit_code,
-        "description": """메모리 상의 코드를 주어진 편집 목록에 따라 수정합니다. 여러 개의 편집 작업을 하나의 리스트로 전달하여 한 번에 실행할 수 있습니다.
-- `action`: "INSERT", "DELETE", "REPLACE" 중 하나입니다.
-- `line_number` (INSERT의 경우): 코드를 삽입할 위치의 라인 번호. 코드는 해당 라인 **앞**에 삽입됩니다.
-- `start_line`, `end_line` (DELETE/REPLACE의 경우): 삭제 또는 교체할 코드의 시작과 끝 라인 번호 (해당 라인 포함).
-- `content` (INSERT/REPLACE의 경우): 삽입하거나 교체할 새로운 코드. 여러 줄일 경우 `\\n`으로 구분합니다.
-모든 라인 번호는 1-based 입니다. 예시: `{"action": "REPLACE", "start_line": 10, "end_line": 12, "content": "new code..."}`""",
+        "description": """메모리 상의 코드를 주어진 편집 목록에 따라 수정합니다.
+    LLM이 생성하는 형식(range, new_text)을 직접 처리합니다.
+    """
     },
     {
         "name": "finish_patch",
         "function": finish_patch,
         "description": "모든 분석과 수정을 마친 후, 최종 보고서를 생성하고 임무를 종료합니다. 이 함수는 메모리에 있는 최종 수정 코드를 실제 파일에 쓰고, 원본 코드와의 차이점을 담은 diff 리포트를 생성합니다."
-    },
-    {
-        "name": "compile_and_test",
-        "function": compile_and_test,
-        "description": "메모리에 있는 수정된 코드를 사용하여 컴파일을 시도하고 결과를 반환합니다. 이 도구는 실제 파일의 최종 내용을 변경하지 않습니다."
     }
 ]
 
 def find_tool_by_name(name: str):
-    """도구 이름으로 `tool_definitions` 리스트에서 해당 도구의 딕셔너리를 찾습니다."""
+    """도구 이름으로 `tool_definitions`에서 도구 함수를 찾아 반환합니다."""
     for tool in tool_definitions:
         if tool["name"] == name:
-            return tool
+            return tool["function"] # 함수 객체를 직접 반환
     return None
 
 def copy_project_to_workspace(project_path: str, workspace_path: str) -> str:
